@@ -16,6 +16,8 @@
  *
  * Portions Copyright (c) 2014, PostgreSQL Global Development Group
  */
+#include <unistd.h>
+
 #include "postgres.h"
 #include "access/relscan.h"
 #include "access/sysattr.h"
@@ -53,6 +55,8 @@
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
 #include "utils/spccache.h"
+#include "executor/tuptable.h"
+#include "executor/execAsync.h"
 
 PG_MODULE_MAGIC;
 
@@ -110,6 +114,10 @@ static CustomPathMethods	ctidscan_path_methods;
 static CustomScanMethods	ctidscan_scan_methods;
 static CustomExecMethods	ctidscan_exec_methods;
 
+void CtidAsyncScanRequest(AsyncRequest *areq);
+void CtidAsyncScanNotify(AsyncRequest *areq);
+void CtidAsyncScanConfigureWait(AsyncRequest *areq);
+
 #define IsCTIDVar(node,rtindex)											\
 	((node) != NULL &&													\
 	 IsA((node), Var) &&												\
@@ -129,6 +137,8 @@ SetCtidScanPath(PlannerInfo *root, RelOptInfo *baserel,
 	char			relkind;
 	ListCell	   *lc;
 	List		   *ctid_quals = NIL;
+
+	elog(NOTICE,"aaaaaaa");
 
 	/* only plain relations are supported */
 	if (rte->rtekind != RTE_RELATION)
@@ -189,11 +199,13 @@ SetCtidScanPath(PlannerInfo *root, RelOptInfo *baserel,
 		cpath->path.parent = baserel;
 		cpath->path.pathtarget = baserel->reltarget;
 		cpath->path.param_info = param_info;
-		cpath->flags = CUSTOMPATH_SUPPORT_BACKWARD_SCAN;
+		cpath->flags = CUSTOMPATH_SUPPORT_BACKWARD_SCAN+CUSTOMPATH_SUPPORT_ASYNC_EXECUTION;
 		cpath->custom_private = ctid_quals;
 		cpath->methods = &ctidscan_path_methods;
 
 		cost_tidscan(&cpath->path, root, baserel, ctid_quals, param_info);
+		// for test, to force using ctidscan, set fixed and small cost.
+		cpath->path.total_cost=1;
 
 		add_path(baserel, &cpath->path);
 	}
@@ -462,6 +474,34 @@ ExplainCtidScan(CustomScanState *node, List *ancestors, ExplainState *es)
 	}
 }
 
+void CtidAsyncScanRequest(AsyncRequest *areq){
+	//elog(NOTICE,"get request");
+	ExecAsyncRequestPending(areq);
+	return ;
+}
+
+void CtidAsyncScanNotify(AsyncRequest *areq){
+	TupleTableSlot *result;
+	CustomScanState *css = (CustomScanState *) areq->requestee;
+	//elog(NOTICE,"notify");
+	result = ExecCtidScan(css);
+	ExecAsyncRequestDone(areq,result);
+}
+
+void CtidAsyncScanConfigureWait(AsyncRequest *areq){
+	AppendState *requestor = (AppendState *) areq->requestor;
+	WaitEventSet *set = requestor->as_eventset;
+	int dummypipe[2];
+	//elog(NOTICE,"waiting...");
+	
+	//dummypipe is just for trigger event.
+	pipe(dummypipe);
+	AddWaitEventToSet(set,WL_SOCKET_READABLE,dummypipe[0],NULL,areq);
+	// trigger event.
+	write(dummypipe[1],"dummy",1);
+}
+
+
 /*
  * Entrypoint of this extension
  */
@@ -494,6 +534,9 @@ _PG_init(void)
 	ctidscan_exec_methods.EndCustomScan		= EndCtidScan;
 	ctidscan_exec_methods.ReScanCustomScan	= ReScanCtidScan;
 	ctidscan_exec_methods.ExplainCustomScan	= ExplainCtidScan;
+	ctidscan_exec_methods.CustomScanAsyncRequest	= CtidAsyncScanRequest;
+	ctidscan_exec_methods.CustomScanAsyncNotify	= CtidAsyncScanNotify;
+	ctidscan_exec_methods.CustomScanAsyncConfigureWait	= CtidAsyncScanConfigureWait;
 	
 	/* registration of the hook to add alternative path */
 	set_rel_pathlist_next = set_rel_pathlist_hook;
