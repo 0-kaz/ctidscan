@@ -47,6 +47,7 @@
 #include "parser/parsetree.h"
 #include "storage/bufmgr.h"
 #include "storage/itemptr.h"
+#include "storage/fd.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
@@ -491,14 +492,11 @@ void CtidAsyncScanNotify(AsyncRequest *areq){
 void CtidAsyncScanConfigureWait(AsyncRequest *areq){
 	AppendState *requestor = (AppendState *) areq->requestor;
 	WaitEventSet *set = requestor->as_eventset;
-	int dummypipe[2];
+	FILE *fh;
 	//elog(NOTICE,"waiting...");
 	
-	//dummypipe is just for trigger event.
-	pipe(dummypipe);
-	AddWaitEventToSet(set,WL_SOCKET_READABLE,dummypipe[0],NULL,areq);
-	// trigger event.
-	write(dummypipe[1],"dummy",1);
+	fh=AllocateFile("/proc/cmdline","r");
+	AddWaitEventToSet(set,WL_SOCKET_READABLE,fileno(fh),NULL,areq);
 }
 
 
