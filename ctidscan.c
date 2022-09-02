@@ -309,8 +309,6 @@ BeginCtidScan(CustomScanState *node, EState *estate, int eflags)
 	/* setup WHERE-clause again */
 	ctss->css.ss.ps.qual = ExecInitQual(cscan->scan.plan.qual, &ctss->css.ss.ps);
 
-	// Open dummy file ( for trigger AddWaitEventToSet in CtidAsyncScanConfigureWait )
-	ctss->dummy = AllocateFile("/proc/cmdline","r");
 }
 
 /*
@@ -387,6 +385,9 @@ ReScanCtidScan(CustomScanState *node)
 	/* begin table scan with ctid range */
 	scan = table_beginscan_tidrange(relation, estate->es_snapshot, &ip_min, &ip_max);
 	ctss->css.ss.ss_currentScanDesc = scan;
+
+	// Open dummy file ( for trigger AddWaitEventToSet in CtidAsyncScanConfigureWait )
+	ctss->dummy = AllocateFile("/proc/cmdline","r");
 }
 
 /*
@@ -480,7 +481,12 @@ ExplainCtidScan(CustomScanState *node, List *ancestors, ExplainState *es)
 }
 
 void CtidAsyncScanRequest(AsyncRequest *areq){
+	CtidScanState *ctss = (CtidScanState *) areq->requestee;
+	CustomScanState *node = (CustomScanState *) areq->requestee;
 	//elog(NOTICE,"get request");
+	if (!ctss->css.ss.ss_currentScanDesc){
+		ReScanCtidScan(node);
+	}
 	ExecAsyncRequestPending(areq);
 	return ;
 }
