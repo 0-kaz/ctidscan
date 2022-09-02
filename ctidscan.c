@@ -78,6 +78,7 @@ typedef struct {
 	CustomScanState	css;
 	List	   *ctid_exprs;
 	List	   *ctid_opers;
+	FILE	*dummy;
 } CtidScanState;
 
 /* static variables */
@@ -138,8 +139,6 @@ SetCtidScanPath(PlannerInfo *root, RelOptInfo *baserel,
 	char			relkind;
 	ListCell	   *lc;
 	List		   *ctid_quals = NIL;
-
-	elog(NOTICE,"aaaaaaa");
 
 	/* only plain relations are supported */
 	if (rte->rtekind != RTE_RELATION)
@@ -309,6 +308,9 @@ BeginCtidScan(CustomScanState *node, EState *estate, int eflags)
 										  cscan->scan.scanrelid);
 	/* setup WHERE-clause again */
 	ctss->css.ss.ps.qual = ExecInitQual(cscan->scan.plan.qual, &ctss->css.ss.ps);
+
+	// Open dummy file ( for trigger AddWaitEventToSet in CtidAsyncScanConfigureWait )
+	ctss->dummy = AllocateFile("/proc/cmdline","r");
 }
 
 /*
@@ -439,6 +441,8 @@ EndCtidScan(CustomScanState *node)
 
 	if (ctss->css.ss.ss_currentScanDesc)
 		table_endscan(ctss->css.ss.ss_currentScanDesc);
+
+	FreeFile(ctss->dummy);
 }
 
 /*
@@ -492,11 +496,10 @@ void CtidAsyncScanNotify(AsyncRequest *areq){
 void CtidAsyncScanConfigureWait(AsyncRequest *areq){
 	AppendState *requestor = (AppendState *) areq->requestor;
 	WaitEventSet *set = requestor->as_eventset;
-	FILE *fh;
+	CtidScanState *ctss = (CtidScanState *) areq->requestee;
 	//elog(NOTICE,"waiting...");
-	
-	fh=AllocateFile("/proc/cmdline","r");
-	AddWaitEventToSet(set,WL_SOCKET_READABLE,fileno(fh),NULL,areq);
+
+	AddWaitEventToSet(set,WL_SOCKET_READABLE,fileno(ctss->dummy),NULL,areq);
 }
 
 
